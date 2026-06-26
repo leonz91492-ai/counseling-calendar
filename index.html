@@ -319,6 +319,20 @@
             }, 3000);
         }
 
+        function updateStaffSelect() {
+            const select = document.getElementById('leaveStaffSelect');
+            if (!select) return;
+            // 清空舊選項
+            select.innerHTML = '<option value="" disabled selected>請選擇請假人員...</option>';
+            // 將全域變數裡的人員加入選單
+            window.allStaff.forEach(staff => {
+                const option = document.createElement('option');
+                option.value = staff;
+                option.textContent = staff;
+                select.appendChild(option);
+            });
+        }
+
         function handleUpdateStaff() {
             const input = document.getElementById('staffListInput').value;
             window.allStaff = input.split(/[,，、\n]+/).map(s => s.trim()).filter(s => s !== '');
@@ -381,46 +395,6 @@
             if(typeof window.saveDataToCloud === 'function') {
                 await window.saveDataToCloud();
             }
-        }
-
-        function handleAddLeave() {
-            const name = document.getElementById('leaveStaffSelect').value;
-            const start = document.getElementById('leaveStart').value;
-            const end = document.getElementById('leaveEnd').value;
-
-            if (!name) return showMessage("請選擇請假人員。");
-            if (!start || !end) return showMessage("請完整填寫開始與結束日期。");
-            if (new Date(start) > new Date(end)) return showMessage("開始日期不能晚於結束日期。");
-
-            const newRecord = {
-                id: Date.now(),
-                name: name,
-                start: start,
-                end: end
-            };
-
-            window.leaveRecords.push(newRecord);
-            
-            // 清空輸入
-            document.getElementById('leaveStart').value = '';
-            document.getElementById('leaveEnd').value = '';
-            
-            renderLeaveList();
-            renderCalendar();
-            
-            // 觸發雲端儲存
-            if(typeof window.saveDataToCloud === 'function') window.saveDataToCloud();
-            showMessage("請假紀錄已新增！", false);
-        }
-
-        // 定義為全域函數以便在動態生成的 HTML 中呼叫
-        window.deleteLeaveRecord = function(id) {
-            window.leaveRecords = window.leaveRecords.filter(record => record.id !== id);
-            renderLeaveList();
-            renderCalendar();
-            
-            // 觸發雲端儲存
-            if(typeof window.saveDataToCloud === 'function') window.saveDataToCloud();
         }
 
         function renderLeaveList() {
