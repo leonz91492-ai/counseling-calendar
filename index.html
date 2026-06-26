@@ -417,6 +417,11 @@
             const checkDate = new Date(year, month, day);
             checkDate.setHours(0, 0, 0, 0); 
             
+            // 新增邏輯：若為週六或週日 (0 是週日, 6 是週六)，則不上班，直接回傳空陣列清空資料
+            if (checkDate.getDay() === 0 || checkDate.getDay() === 6) {
+                return { onDuty: [], onLeave: [] };
+            }
+            
             let onLeave = [];
             
             window.leaveRecords.forEach(record => {
