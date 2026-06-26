@@ -105,9 +105,16 @@
             
             showConnectionStatus(true, "儲存中...");
             try {
+                // 確保儲存前清空週末資料 (防呆機制)
+                const cleanLeaveRecords = window.leaveRecords.filter(record => {
+                    const s = new Date(record.start);
+                    const e = new Date(record.end);
+                    return s <= e; 
+                });
+
                 await setDoc(window.docRef, {
                     allStaff: window.allStaff,
-                    leaveRecords: window.leaveRecords,
+                    leaveRecords: cleanLeaveRecords,
                     lastUpdated: new Date().toISOString()
                 });
                 showConnectionStatus(true, "已儲存");
@@ -122,9 +129,14 @@
             const textEl = document.getElementById('cloudStatusText');
             if (indicator && textEl) {
                 if (isOnline) {
-                    indicator.className = "w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse";
+                    if(text === "儲存中...") {
+                        indicator.className = "w-2.5 h-2.5 rounded-full bg-blue-500 animate-bounce";
+                        textEl.className = "text-xs font-medium text-blue-600";
+                    } else {
+                        indicator.className = "w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse";
+                        textEl.className = "text-xs font-medium text-emerald-600";
+                    }
                     textEl.textContent = text || "已連線";
-                    textEl.className = "text-xs font-medium text-emerald-600";
                 } else {
                     indicator.className = "w-2.5 h-2.5 rounded-full bg-amber-500";
                     textEl.textContent = text || "本地模式 (未連線)";
@@ -211,8 +223,8 @@
                         </div>
                     </div>
                     <div id="errorMessage" class="hidden text-sm p-3 rounded-xl transition-all duration-300"></div>
-                    <button onclick="handleAddLeave()" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-xl shadow-sm shadow-blue-200 transition duration-200 flex justify-center items-center gap-2">
-                        <i class="ph-bold ph-plus"></i> 新增請假並同步
+                    <button id="addLeaveBtn" onclick="handleAddLeave()" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-xl shadow-sm shadow-blue-200 transition duration-200 flex justify-center items-center gap-2">
+                        <i class="ph-bold ph-plus"></i> <span>新增請假並同步</span>
                     </button>
                 </div>
             </div>
@@ -314,23 +326,60 @@
             updateStaffSelect();
             renderCalendar();
             
-            // 觸發雲端儲存
             if(typeof window.saveDataToCloud === 'function') window.saveDataToCloud();
             showMessage("人員名單已更新！", false);
         }
 
-        function updateStaffSelect() {
-            const select = document.getElementById('leaveStaffSelect');
-            select.innerHTML = '';
-            if (window.allStaff.length === 0) {
-                select.innerHTML = '<option value="">請先輸入人員名單</option>';
-            } else {
-                window.allStaff.forEach(staff => {
-                    const option = document.createElement('option');
-                    option.value = staff;
-                    option.textContent = staff;
-                    select.appendChild(option);
-                });
+        async function handleAddLeave() {
+            const name = document.getElementById('leaveStaffSelect').value;
+            const start = document.getElementById('leaveStart').value;
+            const end = document.getElementById('leaveEnd').value;
+            const btn = document.getElementById('addLeaveBtn');
+
+            if (!name) return showMessage("請選擇請假人員。");
+            if (!start || !end) return showMessage("請完整填寫開始與結束日期。");
+            if (new Date(start) > new Date(end)) return showMessage("開始日期不能晚於結束日期。");
+
+            // UI 按鈕處理中狀態
+            const originalBtnHtml = btn.innerHTML;
+            btn.innerHTML = '<i class="ph-bold ph-spinner animate-spin"></i> <span>同步中...</span>';
+            btn.disabled = true;
+            btn.classList.add('opacity-70', 'cursor-not-allowed');
+
+            const newRecord = {
+                id: Date.now(),
+                name: name,
+                start: start,
+                end: end
+            };
+
+            window.leaveRecords.push(newRecord);
+            
+            document.getElementById('leaveStart').value = '';
+            document.getElementById('leaveEnd').value = '';
+            
+            renderLeaveList();
+            renderCalendar();
+            
+            if(typeof window.saveDataToCloud === 'function') {
+                await window.saveDataToCloud();
+            }
+            
+            // 恢復按鈕狀態
+            btn.innerHTML = originalBtnHtml;
+            btn.disabled = false;
+            btn.classList.remove('opacity-70', 'cursor-not-allowed');
+            
+            showMessage("請假紀錄已新增！", false);
+        }
+
+        window.deleteLeaveRecord = async function(id) {
+            window.leaveRecords = window.leaveRecords.filter(record => record.id !== id);
+            renderLeaveList();
+            renderCalendar();
+            
+            if(typeof window.saveDataToCloud === 'function') {
+                await window.saveDataToCloud();
             }
         }
 
