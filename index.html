@@ -1,0 +1,527 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>輔導處排班與請假日曆公告系統 (雲端協作版)</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <script src="https://unpkg.com/@phosphor-icons/web"></script>
+    
+    <!-- 引入 Firebase SDK -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, setDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // ==========================================
+        // 🔥 請在此處貼上您的 Firebase 設定資料 🔥
+        // ==========================================
+        // 設定專屬的 App ID (可自訂，用來區分不同學期的資料庫)
+        const appId = 'smin-counseling-calendar-2026';
+        
+        // 請將您從 Firebase 控制台取得的資料，替換下方引號內的中文提示文字：
+        const firebaseConfig = {
+            apiKey: "AIzaSyBbp0kx2GZofhV1jEKox-KZATIxH-Q5f8U",
+  authDomain: "counseling-calendar.firebaseapp.com",
+  projectId: "counseling-calendar",
+  storageBucket: "counseling-calendar.firebasestorage.app",
+  messagingSenderId: "940932153217",
+  appId: "1:940932153217:web:4453599a0366ea84f23280",
+  measurementId: "G-X6M9YRDTK1"
+        };
+        // ==========================================
+
+        // 定義全域變數供後續函數使用
+        window.db = null;
+        window.appId = appId;
+        window.docRef = null;
+
+        // 如果有配置則初始化 Firebase
+        if (Object.keys(firebaseConfig).length > 0) {
+            try {
+                const app = initializeApp(firebaseConfig);
+                window.db = getFirestore(app);
+                const auth = getAuth(app);
+                
+                // 匿名登入 (因為是公開的排班表，先用匿名登入簡化流程)
+                signInAnonymously(auth).then(() => {
+                    console.log("Firebase 匿名登入成功");
+                    
+                    // 設定我們用來存資料的文檔路徑 (嚴格遵守 RULE 1: public/data/collectionName)
+                    window.docRef = doc(window.db, 'artifacts', window.appId, 'public', 'data', 'counselingSchedule', 'mainDoc');
+                    
+                    // 啟用即時監聽
+                    setupRealtimeListener();
+                }).catch((error) => {
+                    console.error("Firebase 登入失敗:", error);
+                    showConnectionStatus(false);
+                });
+            } catch (error) {
+                console.error("Firebase 初始化錯誤:", error);
+                showConnectionStatus(false);
+            }
+        } else {
+             showConnectionStatus(false);
+        }
+
+        function setupRealtimeListener() {
+            if (!window.docRef) return;
+
+            onSnapshot(window.docRef, (docSnap) => {
+                if (docSnap.exists()) {
+                    const data = docSnap.data();
+                    
+                    // 從雲端更新本地狀態
+                    if (data.allStaff) {
+                        window.allStaff = data.allStaff;
+                        document.getElementById('staffListInput').value = window.allStaff.join(',');
+                    }
+                    if (data.leaveRecords) {
+                        window.leaveRecords = data.leaveRecords;
+                    }
+                    
+                    // 更新 UI
+                    updateStaffSelect();
+                    renderLeaveList();
+                    renderCalendar();
+                    showConnectionStatus(true, "已同步雲端資料");
+                } else {
+                    // 如果雲端沒資料，把目前的預設資料推上去
+                    saveDataToCloud();
+                    showConnectionStatus(true, "建立初始雲端文件");
+                }
+            }, (error) => {
+                console.error("監聽 Firestore 失敗:", error);
+                showConnectionStatus(false);
+            });
+        }
+
+        window.saveDataToCloud = async function() {
+            if (!window.docRef) {
+                console.warn("未連接資料庫，僅保存在本地");
+                return;
+            }
+            
+            showConnectionStatus(true, "儲存中...");
+            try {
+                await setDoc(window.docRef, {
+                    allStaff: window.allStaff,
+                    leaveRecords: window.leaveRecords,
+                    lastUpdated: new Date().toISOString()
+                });
+                showConnectionStatus(true, "已儲存");
+            } catch (error) {
+                console.error("儲存到雲端失敗:", error);
+                showConnectionStatus(false, "儲存失敗");
+            }
+        }
+        
+        function showConnectionStatus(isOnline, text = "") {
+            const indicator = document.getElementById('cloudStatusIndicator');
+            const textEl = document.getElementById('cloudStatusText');
+            if (indicator && textEl) {
+                if (isOnline) {
+                    indicator.className = "w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse";
+                    textEl.textContent = text || "已連線";
+                    textEl.className = "text-xs font-medium text-emerald-600";
+                } else {
+                    indicator.className = "w-2.5 h-2.5 rounded-full bg-amber-500";
+                    textEl.textContent = text || "本地模式 (未連線)";
+                    textEl.className = "text-xs font-medium text-amber-600";
+                }
+            }
+        }
+    </script>
+
+    <style>
+        body {
+            font-family: 'Inter', 'Noto Sans TC', sans-serif;
+            background-color: #f8fafc;
+        }
+        /* 列印專用樣式 */
+        @media print {
+            body { background-color: white; }
+            .no-print { display: none !important; }
+            .print-full-width { width: 100% !important; max-width: 100% !important; }
+            .calendar-container { box-shadow: none !important; border: none !important; }
+            .calendar-cell { break-inside: avoid; border: 1px solid #e2e8f0 !important; }
+            @page { size: landscape; margin: 1cm; }
+        }
+        /* 自訂滾動條 */
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: #f1f1f1; border-radius: 8px; }
+        ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 8px; }
+        ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+    </style>
+</head>
+<body class="text-slate-800 p-4 md:p-8">
+
+    <!-- 雲端狀態指示器 -->
+    <div class="fixed top-4 right-4 bg-white px-3 py-1.5 rounded-full shadow-sm border border-slate-200 flex items-center gap-2 z-50 no-print transition-all duration-300">
+        <div id="cloudStatusIndicator" class="w-2.5 h-2.5 rounded-full bg-slate-300"></div>
+        <span id="cloudStatusText" class="text-xs font-medium text-slate-500">連線中...</span>
+    </div>
+
+    <div class="max-w-7xl mx-auto flex flex-col lg:flex-row gap-6 print-full-width mt-6">
+        
+        <!-- 左側設定區 (列印時隱藏) -->
+        <aside class="w-full lg:w-1/3 flex flex-col gap-6 no-print">
+            
+            <div class="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 relative overflow-hidden">
+                <div class="absolute top-0 right-0 w-24 h-24 bg-blue-50 rounded-bl-full -z-10 opacity-50"></div>
+                <div class="flex items-center gap-3 mb-2">
+                    <i class="ph-fill ph-cloud-check text-blue-600 text-3xl"></i>
+                    <h1 class="text-xl font-bold text-slate-800">排班日曆系統 <span class="text-xs align-top text-blue-600 bg-blue-100 px-1.5 py-0.5 rounded-md">雲端版</span></h1>
+                </div>
+                <p class="text-sm text-slate-500">設定名單與請假日期，資料將自動同步至雲端，支援多人協作與即時列印。</p>
+            </div>
+
+            <div class="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
+                <h2 class="text-lg font-semibold mb-4 flex items-center gap-2">
+                    <i class="ph-fill ph-users text-slate-500"></i> 處室總名單
+                </h2>
+                <label class="block text-sm font-medium text-slate-700 mb-1">請輸入人員姓名 (以逗號分隔)</label>
+                <!-- 預設帶入四位同仁 -->
+                <textarea id="staffListInput" rows="2" class="w-full px-4 py-2 rounded-xl border border-slate-300 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition text-sm resize-none" placeholder="例如：王小明, 陳大妹, 林阿姨">琇琪,雅珍,合慶,佳鷺</textarea>
+                <button onclick="handleUpdateStaff()" class="mt-3 w-full bg-slate-100 hover:bg-slate-200 text-slate-700 font-medium py-2 px-4 rounded-xl transition duration-200 flex justify-center items-center gap-2">
+                    <i class="ph-bold ph-arrows-clockwise"></i> 更新並同步名單
+                </button>
+            </div>
+
+            <div class="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
+                <h2 class="text-lg font-semibold mb-4 flex items-center gap-2">
+                    <i class="ph-fill ph-calendar-plus text-rose-500"></i> 登記請假
+                </h2>
+                <div class="flex flex-col gap-4">
+                    <div>
+                        <label class="block text-sm font-medium text-slate-700 mb-1">請假人員</label>
+                        <select id="leaveStaffSelect" class="w-full px-4 py-2 rounded-xl border border-slate-300 focus:ring-2 focus:ring-blue-500 outline-none transition text-sm">
+                            <!-- 動態生成選項 -->
+                        </select>
+                    </div>
+                    <div class="flex gap-4">
+                        <div class="w-1/2">
+                            <label class="block text-sm font-medium text-slate-700 mb-1">開始日期</label>
+                            <input type="date" id="leaveStart" class="w-full px-3 py-2 rounded-xl border border-slate-300 focus:ring-2 focus:ring-blue-500 outline-none transition text-sm">
+                        </div>
+                        <div class="w-1/2">
+                            <label class="block text-sm font-medium text-slate-700 mb-1">結束日期</label>
+                            <input type="date" id="leaveEnd" class="w-full px-3 py-2 rounded-xl border border-slate-300 focus:ring-2 focus:ring-blue-500 outline-none transition text-sm">
+                        </div>
+                    </div>
+                    <div id="errorMessage" class="hidden text-sm p-3 rounded-xl transition-all duration-300"></div>
+                    <button onclick="handleAddLeave()" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-xl shadow-sm shadow-blue-200 transition duration-200 flex justify-center items-center gap-2">
+                        <i class="ph-bold ph-plus"></i> 新增請假並同步
+                    </button>
+                </div>
+            </div>
+
+            <div class="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 flex-1 flex flex-col">
+                <h2 class="text-lg font-semibold mb-4 flex items-center gap-2">
+                    <i class="ph-fill ph-list-dashes text-slate-500"></i> 已登記請假清單
+                </h2>
+                <div id="leaveListContainer" class="flex flex-col gap-2 max-h-60 overflow-y-auto pr-2 flex-1">
+                    <!-- 紀錄將由 JS 動態生成 -->
+                </div>
+            </div>
+        </aside>
+
+        <main class="w-full lg:w-2/3 print-full-width">
+            <div class="bg-white p-4 md:p-8 rounded-2xl shadow-sm border border-slate-200 calendar-container h-full flex flex-col">
+                
+                <div class="flex flex-col sm:flex-row justify-between items-center mb-6 gap-4">
+                    <div class="flex items-center gap-4 no-print">
+                        <button onclick="changeMonth(-1)" class="p-2 hover:bg-slate-100 rounded-full transition text-slate-600">
+                            <i class="ph-bold ph-caret-left text-xl"></i>
+                        </button>
+                        <h2 id="calendarTitle" class="text-2xl font-bold text-slate-800 w-40 text-center">2026年 7月</h2>
+                        <button onclick="changeMonth(1)" class="p-2 hover:bg-slate-100 rounded-full transition text-slate-600">
+                            <i class="ph-bold ph-caret-right text-xl"></i>
+                        </button>
+                    </div>
+                    
+                    <h2 id="printCalendarTitle" class="hidden print:block text-2xl font-bold text-slate-800 text-center w-full mb-4 pb-2 border-b-2 border-slate-800">輔導處 2026年 7月 輪值與請假公告</h2>
+                    
+                    <div class="no-print">
+                        <button onclick="window.print()" class="bg-slate-800 hover:bg-slate-900 text-white font-medium py-2 px-5 rounded-xl shadow-sm transition duration-200 flex items-center gap-2">
+                            <i class="ph-bold ph-printer"></i> 列印公告
+                        </button>
+                    </div>
+                </div>
+
+                <div class="w-full flex-1 flex flex-col">
+                    <div class="grid grid-cols-7 border-b-2 border-slate-200 mb-2">
+                        <div class="py-2 text-center text-sm font-bold text-rose-600">週日</div>
+                        <div class="py-2 text-center text-sm font-bold text-slate-600">週一</div>
+                        <div class="py-2 text-center text-sm font-bold text-slate-600">週二</div>
+                        <div class="py-2 text-center text-sm font-bold text-slate-600">週三</div>
+                        <div class="py-2 text-center text-sm font-bold text-slate-600">週四</div>
+                        <div class="py-2 text-center text-sm font-bold text-slate-600">週五</div>
+                        <div class="py-2 text-center text-sm font-bold text-slate-500">週六</div>
+                    </div>
+                    <div id="calendarGrid" class="grid grid-cols-7 gap-1 md:gap-2 flex-1 auto-rows-fr">
+                        <!-- 由 JS 動態生成 -->
+                    </div>
+                </div>
+
+                <div class="mt-6 flex justify-end gap-4 text-sm font-medium no-print">
+                    <div class="flex items-center gap-1.5"><span class="w-3 h-3 rounded-full bg-blue-500 shadow-sm shadow-blue-200"></span> 留職人員</div>
+                    <div class="flex items-center gap-1.5"><span class="w-3 h-3 rounded-full bg-rose-500 shadow-sm shadow-rose-200"></span> 請假人員</div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script>
+        // 1. 定義全域狀態 (與 Firebase 共用的本機變數)
+        // 預設填入已知資料，即使在未連線狀態下也有初始畫面
+        window.allStaff = ['琇琪', '雅珍', '合慶', '佳鷺'];
+        window.leaveRecords = [
+            { id: 1700000000001, name: '琇琪', start: '2026-07-28', end: '2026-08-07' },
+            { id: 1700000000002, name: '雅珍', start: '2026-07-29', end: '2026-08-07' },
+            { id: 1700000000003, name: '合慶', start: '2026-07-18', end: '2026-08-08' },
+            { id: 1700000000004, name: '佳鷺', start: '2026-07-30', end: '2026-08-10' }
+        ];
+        
+        let currentDate = new Date(2026, 6, 1); // 預設顯示 2026 年 7 月
+
+        // 2. 初始化
+        window.addEventListener('DOMContentLoaded', () => {
+            // 本地初始化
+            updateStaffSelect();
+            renderLeaveList();
+            renderCalendar();
+        });
+
+        // 3. UI 互動函數
+        function showMessage(msg, isError = true) {
+            const msgBox = document.getElementById('errorMessage');
+            msgBox.textContent = msg;
+            msgBox.className = isError 
+                ? "text-sm text-rose-700 bg-rose-50 border border-rose-200 p-3 rounded-xl transition-all duration-300" 
+                : "text-sm text-emerald-700 bg-emerald-50 border border-emerald-200 p-3 rounded-xl transition-all duration-300";
+            msgBox.classList.remove('hidden');
+            setTimeout(() => {
+                msgBox.classList.add('hidden');
+            }, 3000);
+        }
+
+        function handleUpdateStaff() {
+            const input = document.getElementById('staffListInput').value;
+            window.allStaff = input.split(/[,，、\n]+/).map(s => s.trim()).filter(s => s !== '');
+            
+            updateStaffSelect();
+            renderCalendar();
+            
+            // 觸發雲端儲存
+            if(typeof window.saveDataToCloud === 'function') window.saveDataToCloud();
+            showMessage("人員名單已更新！", false);
+        }
+
+        function updateStaffSelect() {
+            const select = document.getElementById('leaveStaffSelect');
+            select.innerHTML = '';
+            if (window.allStaff.length === 0) {
+                select.innerHTML = '<option value="">請先輸入人員名單</option>';
+            } else {
+                window.allStaff.forEach(staff => {
+                    const option = document.createElement('option');
+                    option.value = staff;
+                    option.textContent = staff;
+                    select.appendChild(option);
+                });
+            }
+        }
+
+        function handleAddLeave() {
+            const name = document.getElementById('leaveStaffSelect').value;
+            const start = document.getElementById('leaveStart').value;
+            const end = document.getElementById('leaveEnd').value;
+
+            if (!name) return showMessage("請選擇請假人員。");
+            if (!start || !end) return showMessage("請完整填寫開始與結束日期。");
+            if (new Date(start) > new Date(end)) return showMessage("開始日期不能晚於結束日期。");
+
+            const newRecord = {
+                id: Date.now(),
+                name: name,
+                start: start,
+                end: end
+            };
+
+            window.leaveRecords.push(newRecord);
+            
+            // 清空輸入
+            document.getElementById('leaveStart').value = '';
+            document.getElementById('leaveEnd').value = '';
+            
+            renderLeaveList();
+            renderCalendar();
+            
+            // 觸發雲端儲存
+            if(typeof window.saveDataToCloud === 'function') window.saveDataToCloud();
+            showMessage("請假紀錄已新增！", false);
+        }
+
+        // 定義為全域函數以便在動態生成的 HTML 中呼叫
+        window.deleteLeaveRecord = function(id) {
+            window.leaveRecords = window.leaveRecords.filter(record => record.id !== id);
+            renderLeaveList();
+            renderCalendar();
+            
+            // 觸發雲端儲存
+            if(typeof window.saveDataToCloud === 'function') window.saveDataToCloud();
+        }
+
+        function renderLeaveList() {
+            const container = document.getElementById('leaveListContainer');
+            container.innerHTML = '';
+
+            if (window.leaveRecords.length === 0) {
+                container.innerHTML = '<div class="flex-1 flex items-center justify-center border-2 border-dashed border-slate-200 rounded-xl"><p class="text-sm text-slate-400">目前無請假紀錄</p></div>';
+                return;
+            }
+
+            const sortedRecords = [...window.leaveRecords].sort((a, b) => new Date(a.start) - new Date(b.start));
+
+            sortedRecords.forEach(record => {
+                const item = document.createElement('div');
+                item.className = "flex justify-between items-center p-3 bg-slate-50 border border-slate-100 rounded-xl hover:border-slate-200 hover:shadow-sm transition-all group";
+                
+                // 格式化日期顯示 (移除年份以節省空間)
+                const startStr = record.start.substring(5).replace('-', '/');
+                const endStr = record.end.substring(5).replace('-', '/');
+
+                item.innerHTML = `
+                    <div class="flex flex-col">
+                        <span class="font-semibold text-slate-800 text-sm flex items-center gap-1.5">
+                            <span class="w-2 h-2 rounded-full bg-rose-400"></span>${record.name}
+                        </span>
+                        <span class="text-xs text-slate-500 mt-1 pl-3.5 font-medium tracking-wide">${startStr} ~ ${endStr}</span>
+                    </div>
+                    <button onclick="window.deleteLeaveRecord(${record.id})" class="text-slate-400 hover:text-rose-600 hover:bg-rose-100 p-2 rounded-lg transition-colors" title="刪除">
+                        <i class="ph-bold ph-trash"></i>
+                    </button>
+                `;
+                container.appendChild(item);
+            });
+        }
+
+        function changeMonth(offset) {
+            currentDate.setMonth(currentDate.getMonth() + offset);
+            renderCalendar();
+        }
+
+        function getDayStatus(year, month, day) {
+            const checkDate = new Date(year, month, day);
+            checkDate.setHours(0, 0, 0, 0); 
+            
+            let onLeave = [];
+            
+            window.leaveRecords.forEach(record => {
+                const sDate = new Date(record.start);
+                sDate.setHours(0, 0, 0, 0);
+                const eDate = new Date(record.end);
+                eDate.setHours(0, 0, 0, 0);
+                
+                if (checkDate >= sDate && checkDate <= eDate) {
+                    if (!onLeave.includes(record.name)) {
+                        onLeave.push(record.name);
+                    }
+                }
+            });
+
+            let onDuty = window.allStaff.filter(name => !onLeave.includes(name));
+            return { onDuty, onLeave };
+        }
+
+        function renderCalendar() {
+            const year = currentDate.getFullYear();
+            const month = currentDate.getMonth();
+            
+            const titleText = `${year}年 ${month + 1}月`;
+            document.getElementById('calendarTitle').textContent = titleText;
+            document.getElementById('printCalendarTitle').textContent = `輔導處 ${titleText} 輪值與請假公告`;
+
+            const grid = document.getElementById('calendarGrid');
+            grid.innerHTML = '';
+
+            const firstDay = new Date(year, month, 1).getDay();
+            const daysInMonth = new Date(year, month + 1, 0).getDate();
+
+            // 填充空白天數
+            for (let i = 0; i < firstDay; i++) {
+                const emptyCell = document.createElement('div');
+                emptyCell.className = "bg-slate-50/30 rounded-xl border border-transparent";
+                grid.appendChild(emptyCell);
+            }
+
+            // 填充實際天數
+            for (let day = 1; day <= daysInMonth; day++) {
+                const cellDate = new Date(year, month, day);
+                const isWeekend = cellDate.getDay() === 0 || cellDate.getDay() === 6;
+                const status = getDayStatus(year, month, day);
+                
+                const cell = document.createElement('div');
+                cell.className = `calendar-cell relative p-1.5 md:p-2.5 rounded-xl border flex flex-col gap-1.5 transition-all ${
+                    isWeekend ? 'bg-slate-50 border-slate-100' : 'bg-white border-slate-200 hover:border-blue-300 hover:shadow-sm'
+                }`;
+
+                const dayNum = document.createElement('div');
+                dayNum.className = `text-right text-sm font-bold ${isWeekend ? 'text-slate-400' : 'text-slate-700'}`;
+                dayNum.textContent = day;
+                cell.appendChild(dayNum);
+
+                const opacityClass = isWeekend ? 'opacity-50 hover:opacity-100 transition-opacity' : 'opacity-100';
+                
+                // 留職人員
+                if (status.onDuty.length > 0) {
+                    const dutyWrapper = document.createElement('div');
+                    dutyWrapper.className = `flex flex-wrap gap-1 ${opacityClass}`;
+                    
+                    const dutyLabel = document.createElement('span');
+                    dutyLabel.className = 'w-full text-[10px] text-slate-400 font-bold tracking-wider leading-none mb-0.5 print:hidden uppercase';
+                    dutyLabel.textContent = 'Duty';
+                    dutyWrapper.appendChild(dutyLabel);
+
+                    status.onDuty.forEach(name => {
+                        const badge = document.createElement('span');
+                        badge.className = "bg-blue-50 text-blue-700 border border-blue-100 text-[11px] md:text-xs font-medium px-1.5 py-0.5 rounded shadow-sm whitespace-nowrap print:bg-blue-100 print:border-none print:text-black print:shadow-none";
+                        badge.textContent = name;
+                        dutyWrapper.appendChild(badge);
+                    });
+                    cell.appendChild(dutyWrapper);
+                }
+
+                if(status.onDuty.length > 0 && status.onLeave.length > 0) {
+                     const divider = document.createElement('div');
+                     divider.className = "w-full border-t border-dashed border-slate-200 my-0.5 opacity-50";
+                     cell.appendChild(divider);
+                }
+
+                // 請假人員
+                if (status.onLeave.length > 0) {
+                    const leaveWrapper = document.createElement('div');
+                    leaveWrapper.className = `flex flex-wrap gap-1 mt-auto pt-1 ${opacityClass}`;
+                    
+                    const leaveLabel = document.createElement('span');
+                    leaveLabel.className = 'w-full text-[10px] text-slate-400 font-bold tracking-wider leading-none mb-0.5 print:hidden uppercase';
+                    leaveLabel.textContent = 'Leave';
+                    leaveWrapper.appendChild(leaveLabel);
+
+                    status.onLeave.forEach(name => {
+                        const badge = document.createElement('span');
+                        badge.className = "bg-rose-50 text-rose-700 border border-rose-100 text-[11px] md:text-xs font-medium px-1.5 py-0.5 rounded shadow-sm whitespace-nowrap print:bg-rose-100 print:border-none print:text-black print:shadow-none print:line-through line-through decoration-rose-300";
+                        badge.textContent = name;
+                        leaveWrapper.appendChild(badge);
+                    });
+                    cell.appendChild(leaveWrapper);
+                }
+
+                grid.appendChild(cell);
+            }
+        }
+    </script>
+</body>
+</html>
